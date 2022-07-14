@@ -1,11 +1,12 @@
-include("./OptionFramework.jl")
 include("./Utils.jl")
+include("./OptionFramework/OptionFramework.jl")
+using Random
 using .OptionFramework
 using .Utils
 using LinearAlgebra
 using Base.Iterators
 
-function collect_data()
+function collect_data(modeltype::Type{K}, load_from="", save_to="", checkpoints = [1000, 10000, 100000, 1000000, 10000000]) where K <: OptFramework
     dim_s = 4
     dim_a = 2
     dim_o = 2
@@ -18,23 +19,23 @@ function collect_data()
 
     pihi = extract_block_diag(pib * [pihi_b1; pihi_b0], dim_o, dim_o, dim_s)
     pilo = extract_block_diag(kron(I(dim_s), [0.7 0.3; 0.3 0.7]), dim_o, dim_a, dim_s)
+    pilo = [0.7 0.3; 0.25 0.75;;; 0.8 0.2; 0.15 0.85;;; 0.65 0.35; 0.1 0.9;;; 0.9 0.1; 0.3 0.7]
     phi = [1 0 0 0; 0.25 0.25 0.25 0.25;;; 0.5 0.5 0 0; 0 1/3 1/3 1/3;;; 1/3 1/3 1/3 0; 0 0 0.5 0.5;;; 0.25 0.25 0.25 0.25; 0 0 0 1]
 
-    if isfile("save_data.jld2")
-        moment_data = load_moment("save_data.jld2")
+    if isfile(load_from)
+        moment_data::Raw3rdOrder{modeltype} = load_moment(load_from)
     else
-        moment_data = Raw3rdOrder(OptionHSM(1, 1, pilo, phi, pihi))
+        moment_data = Raw3rdOrder(modeltype(1, 1, pilo, phi, pihi))
     end
 
-    checkpoints = [1000, 100000, 10000000]
-
-    for i in 4:10000000
+    for i in moment_data.T+1:maximum(checkpoints)
         augment_raw_data!(moment_data)
         if moment_data.T in checkpoints
+            println("saving checkpoints...")
             create_checkpoint!(moment_data)
         end
         if i % 10000 == 0
-            save_moment("save_data.jld2", moment_data)
+            save_moment(save_to, moment_data)
         end
     end
 end
@@ -86,35 +87,52 @@ function generate_fudged_moments(phi, ssAsa, kernel)
 end
 
 function main()
-    raw_3rd_order = load_moment("save_data.jld2")
-    raw_data = raw_3rd_order.data
+    checkpoints = [1000, 10000, 100000, 1000000, 10000000, 100000000]
+    modeltype = FaultyActionOptionHSM
+    save_to = "faulty_action_save_data.jld2"
+    load_from = "faulty_action_save_data.jld2"
+    # collect_data(modeltype, load_from, save_to, checkpoints)
+    raw_3rd_order = load_moment(save_to)
+    raw_data = raw_3rd_order.history[6][2]
+
 
     (dim_o, dim_s, dim_a) = size(raw_data)[1:3]
     (phi, ssAsa, sssa) = generate_moments(raw_data)
-    (f_ssAsa, f_sssa) = generate_fudged_moments(phi, ssAsa)
+
+    fudge_kernel = (mat -> mat + 2 * sign.(mat))(randn(dim_s, dim_s))
+    fudge_kernel = ones(dim_s, dim_s) - I(dim_s)[randperm(dim_s), :]
+    fudge_kernel = [1 1 0 1; 1 1 1 0; 0 1 1 1; 1 0 1 1]
+    # fudge_kernel = [1 2 3 4; 4 3 2 1; 2 1 3 4; 3 2 1 4]
+    (f_ssAsa, f_sssa) = generate_fudged_moments(phi, ssAsa, inv(fudge_kernel))
+    show(stdout, "text/plain", fudge_kernel)
+    println()
 
     tensors_o_interest = [pinv(f_sssa) * f_ssAsa[a] for a in 1:dim_a]
     eta = randn(dim_a)
     to_be_composed = sum(tensors_o_interest .* eta)
     (vals, vecs) = eigen(to_be_composed)
-    vecs[vecs .< 1e-10] .= 0
+    vecs[abs.(vecs) .< 1e-10] .= 0
 
-    show(stdout, "text/plain", vals)
-    println()
+    println(vals)
     show(stdout, "text/plain", vecs)
     println()
 
-    fail_rate = 0.1
-    pib = [Diagonal([0.8, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.8]) Diagonal([0.2, 0.8, 0.8, 0.8, 0.8, 0.8, 0.8, 0.2])]
-    pihi_b1 = dense_block_diag([[0.6 0.4; 0.6 0.4], [0.6 0.4; 0.6 0.4], [0.4 0.6; 0.4 0.6], [0.4 0.6; 0.4 0.6]])
-    pihi_b0 = (1 - fail_rate) * I(dim_s * dim_o) + (fail_rate / dim_o) * kron(I(dim_s), ones(dim_o, dim_o))
-    pihi_kron = pib * [pihi_b1; pihi_b0]
+    diag(a, vecs) = begin
+        d = inv(vecs) * tensors_o_interest[a] * vecs
+        d[abs.(d) .< 1e-10] .= 0
+        d
+    end
+    show(stdout, "text/plain", diag(1, vecs))
+    println()
+    show(stdout, "text/plain", diag(2, vecs))
+    println()
+    vecs = reorder_eigenvecs(vecs, inv(fudge_kernel), rtol=2e-1, ptol=3e-1)
 
-    pilo_kron = kron(I(dim_s), [0.7 0.3; 0.3 0.7])
-    show(stdout, "text/plain", pilo_kron)
+    show(stdout, "text/plain", diag(1, vecs))
     println()
-    show(stdout, "text/plain", pihi_kron * pilo_kron)
+    show(stdout, "text/plain", diag(2, vecs))
     println()
+
 end
 
 main()
