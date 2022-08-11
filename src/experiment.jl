@@ -6,7 +6,7 @@ using .Utils
 using LinearAlgebra
 using Base.Iterators
 
-function collect_data(modeltype::Type{K}, load_from="", save_to="", checkpoints = [1000, 10000, 100000, 1000000, 10000000]) where K <: OptFramework
+function problem_definition()
     dim_s = 4
     dim_a = 2
     dim_o = 2
@@ -17,10 +17,22 @@ function collect_data(modeltype::Type{K}, load_from="", save_to="", checkpoints 
     pihi_b1 = dense_block_diag([[0.6 0.4; 0.6 0.4], [0.6 0.4; 0.6 0.4], [0.4 0.6; 0.4 0.6], [0.4 0.6; 0.4 0.6]])
     pihi_b0 = (1 - fail_rate) * I(dim_s * dim_o) + (fail_rate / dim_o) * kron(I(dim_s), ones(dim_o, dim_o))
 
-    pihi = extract_block_diag(pib * [pihi_b1; pihi_b0], dim_o, dim_o, dim_s)
-    pilo = extract_block_diag(kron(I(dim_s), [0.7 0.3; 0.3 0.7]), dim_o, dim_a, dim_s)
-    pilo = [0.7 0.3; 0.25 0.75;;; 0.8 0.2; 0.15 0.85;;; 0.65 0.35; 0.1 0.9;;; 0.9 0.1; 0.3 0.7]
+    pihi = extract_block_diag(pib * [pihi_b1; pihi_b0], dim_o, dim_o)
+    pilo = [0.7  0.3; 
+            0.25 0.75;;; 
+            0.8  0.2; 
+            0.15 0.85;;; 
+            0.65 0.35; 
+            0.1  0.9;;; 
+            0.9  0.1; 
+            0.3  0.7]
     phi = [1 0 0 0; 0.25 0.25 0.25 0.25;;; 0.5 0.5 0 0; 0 1/3 1/3 1/3;;; 1/3 1/3 1/3 0; 0 0 0.5 0.5;;; 0.25 0.25 0.25 0.25; 0 0 0 1]
+
+    return pihi, pilo, phi
+end
+
+function collect_data(modeltype::Type{K}, load_from="", save_to="", checkpoints = [1000, 10000, 100000, 1000000, 10000000]) where K <: OptFramework
+    (pihi, pilo, phi) = problem_definition()
 
     if isfile(load_from)
         moment_data::Raw3rdOrder{modeltype} = load_moment(load_from)
@@ -56,9 +68,11 @@ function generate_moments(raw_data)
 
     perm_col = cat_rows(reshape(1:dim_s * dim_a, dim_s, :))
     moment_ssAsa = [reshape(moment_ssasa[:, :, a, :, :], dim_s^2, :)[:, perm_col] for a in 1:dim_a]
-    moment_sssa = sum(moment_ssAsa)
 
-    (phi = phi, ssAsa = moment_ssAsa, sssa = moment_sssa)
+    dim_ssa_to_reduce = (2, 5, 6)
+    moment_s2s1a2 = permutedims(dropdims((sum(moment_sasasa, dims=dim_ssa_to_reduce)), dims=dim_ssa_to_reduce), (1, 3, 2))
+
+    (phi = phi, ssAsa = moment_ssAsa, moment_s2s1a2 = moment_s2s1a2)
 end
 
 function generate_fudged_moments(phi, ssAsa)
@@ -86,52 +100,110 @@ function generate_fudged_moments(phi, ssAsa, kernel)
     (fudged_ssAsa = fudged_ssAsa, fudged_sssa = fudged_sssa)
 end
 
+function generate_pilo(matrices, basis, dim_o)
+    dim_a = length(matrices)
+
+    basis_inv = inv(basis)
+    diagonal_matrices = [basis_inv * m * basis for m in matrices]
+    pilo_columns = reduce(hcat, diag.(diagonal_matrices))
+
+    pilo = permutedims(reshape(pilo_columns, dim_o, :, dim_a), (1, 3, 2))
+
+    return pilo
+end
+
 function main()
     checkpoints = [1000, 10000, 100000, 1000000, 10000000, 100000000]
     modeltype = FaultyActionOptionHSM
     save_to = "faulty_action_save_data.jld2"
     load_from = "faulty_action_save_data.jld2"
     # collect_data(modeltype, load_from, save_to, checkpoints)
+    println("Start loading...")
     raw_3rd_order = load_moment(save_to)
     raw_data = raw_3rd_order.history[6][2]
+    println("Finished loading.")
 
+    (true_pihi_kron, true_pilo_kron, true_phi_kron) = dense_block_diag.(eachslice.(problem_definition(), dims=3))
 
     (dim_o, dim_s, dim_a) = size(raw_data)[1:3]
-    (phi, ssAsa, sssa) = generate_moments(raw_data)
+    (phi_estimate, ssAsa, s2s1a2) = generate_moments(raw_data)
 
-    fudge_kernel = (mat -> mat + 2 * sign.(mat))(randn(dim_s, dim_s))
-    fudge_kernel = ones(dim_s, dim_s) - I(dim_s)[randperm(dim_s), :]
-    fudge_kernel = [1 1 0 1; 1 1 1 0; 0 1 1 1; 1 0 1 1]
+    fudge_kernel = (mat -> mat + 0.3sign.(mat))(randn(dim_s, dim_s))
+    # fudge_kernel = ones(dim_s, dim_s) - I(dim_s)[randperm(dim_s), :]
+    fudge_kernel = [1 1 1 0; 
+                    1 1 0 1; 
+                    1 0 1 1; 
+                    0 1 1 1]
+#=     fudge_kernel = [1 1 0 1; 
+                    1 1 1 0; 
+                    0 1 1 1; 
+                    1 0 1 1] =#
+#=     fudge_kernel = [1 1 1 1; 
+                    1 1 0 0; 
+                    0 0 1 1; 
+                    1 1 1 1] + I(dim_s) =#
     # fudge_kernel = [1 2 3 4; 4 3 2 1; 2 1 3 4; 3 2 1 4]
-    (f_ssAsa, f_sssa) = generate_fudged_moments(phi, ssAsa, inv(fudge_kernel))
-    show(stdout, "text/plain", fudge_kernel)
-    println()
+    # fudge_kernel = I(dim_s)
+    # fudge_kernel = ones(dim_s, dim_s) +  2I(dim_s)
+    fudge_kernel = ones(dim_s, dim_s) +  I(dim_s)
 
-    tensors_o_interest = [pinv(f_sssa) * f_ssAsa[a] for a in 1:dim_a]
+    fudge_kernel = inv(fudge_kernel)
+    (f_ssAsa, f_sssa) = generate_fudged_moments(phi_estimate, ssAsa, fudge_kernel)
+    pretty_println(fudge_kernel)
+    pretty_println(inv(fudge_kernel))
+
+    f_sssa_pinv = pinv(f_sssa)
+    tensors_o_interest = [f_sssa_pinv * f_ssAsa[a] for a in 1:dim_a]
     eta = randn(dim_a)
     to_be_composed = sum(tensors_o_interest .* eta)
     (vals, vecs) = eigen(to_be_composed)
-    vecs[abs.(vecs) .< 1e-10] .= 0
 
     println(vals)
-    show(stdout, "text/plain", vecs)
-    println()
+
+    true_basis = inv(true_pihi_kron * true_pilo_kron) * kron(inv(fudge_kernel), I(dim_o))
+
+    normed_vecs = reduce(hcat, normalize.(eachcol(vecs)))
+    normed_true_basis = reduce(hcat, normalize.(eachcol(true_basis)))
+    
+    pretty_println(normed_vecs)
+    pretty_println(normed_true_basis)
+    
+    alignment_grid = (((vec1, vec2),) -> vec1' * vec2).(product(eachcol(normed_vecs), eachcol(normed_true_basis)))
+    alignment_grid = (x -> abs.(abs(x) - 1)).(alignment_grid)
+    pretty_println(alignment_grid)
+    println("Hungarian result")
+    println(hungarian_algorithm(alignment_grid))
 
     diag(a, vecs) = begin
         d = inv(vecs) * tensors_o_interest[a] * vecs
         d[abs.(d) .< 1e-10] .= 0
         d
     end
-    show(stdout, "text/plain", diag(1, vecs))
-    println()
-    show(stdout, "text/plain", diag(2, vecs))
-    println()
-    vecs = reorder_eigenvecs(vecs, inv(fudge_kernel), rtol=2e-1, ptol=3e-1)
 
-    show(stdout, "text/plain", diag(1, vecs))
-    println()
-    show(stdout, "text/plain", diag(2, vecs))
-    println()
+    pretty_println(generate_pilo(tensors_o_interest, vecs, dim_o))
+
+    vecs = reorder_eigenvecs(vecs, fudge_kernel)
+
+    pilo= generate_pilo(tensors_o_interest, vecs, dim_o)
+    pilo_kron = dense_block_diag(eachslice(pilo, dims=3))
+
+    s2s1a2_kron = dense_block_diag(eachslice(s2s1a2, dims=3))
+    kern_pihi = abs.(pilo_kron * pinv(s2s1a2_kron) * f_sssa * pinv(pilo_kron))
+
+    row_wise_normalize(m, p) = reduce(hcat, normalize.(eachrow(m), p))'
+
+    kern_pihi_seg = uniform_partition_views(kern_pihi, dim_o, dim_o) .* abs.(fudge_kernel).^2
+    smeared_pihi = dropdims(sum(kern_pihi_seg, dims=2), dims=2)
+    pihi_kron = row_wise_normalize(dense_block_diag(smeared_pihi), 1)
+
+    pretty_println(kern_pihi)
+
+    println("PILO comparison:")
+    pretty_println(pilo_kron)
+    pretty_println(true_pilo_kron)
+    println("PIHI comparison:")
+    pretty_println(pihi_kron)
+    pretty_println(true_pihi_kron)
 
 end
 
