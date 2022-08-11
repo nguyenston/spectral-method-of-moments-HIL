@@ -192,8 +192,9 @@ function main()
 
     row_wise_normalize(m, p) = reduce(hcat, normalize.(eachrow(m), p))'
 
-    kern_pihi_seg = uniform_partition_views(kern_pihi, dim_o, dim_o) .* abs.(fudge_kernel).^2
-    smeared_pihi = dropdims(sum(kern_pihi_seg, dims=2), dims=2)
+    kern_pihi_seg = uniform_partition_views(kern_pihi, dim_o, dim_o)
+    weighted_kern_pihi_seg = kern_pihi_seg .* abs.(fudge_kernel).^2
+    smeared_pihi = dropdims(sum(kern_pihi_seg, dims=1), dims=1)
     pihi_kron = row_wise_normalize(dense_block_diag(smeared_pihi), 1)
 
     pretty_println(kern_pihi)
@@ -204,6 +205,10 @@ function main()
     println("PIHI comparison:")
     pretty_println(pihi_kron)
     pretty_println(true_pihi_kron)
+
+    norm_kern_pihi_seg = reduce(hcat, reduce.(vcat, eachcol(row_wise_normalize.(kern_pihi_seg, 1))))
+    println("normalized kern_pihi_seg:")
+    pretty_println(norm_kern_pihi_seg)
 
 end
 

@@ -125,11 +125,6 @@ function reorder_eigenvecs(vecs_input, kernel)
     println("Average alignment score:")
     pretty_println(average_alignment_score)
 
-    grouping_kernel = tril(kron(I(dim_o), ones(dim_s, dim_s)), -1)
-    grouping_perm = hungarian_algorithm(grouping_kernel' * average_alignment_score)
-    col_groups = uniform_partitions(perminv(grouping_perm), dim_s)
-    println("Experimental grouping: ", col_groups)
-
     grouping_mask = alignment_mask(average_alignment_score, dim_o)
     col_groups = generate_groups(grouping_mask)
 
