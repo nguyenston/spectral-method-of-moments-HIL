@@ -182,7 +182,7 @@ function main()
 
     pretty_println(generate_pilo(tensors_o_interest, vecs, dim_o))
 
-    vecs = reorder_eigenvecs(vecs, fudge_kernel)
+    vecs = OrderRecovery.reorder_eigenvecs(vecs, fudge_kernel)
 
     pilo= generate_pilo(tensors_o_interest, vecs, dim_o)
     pilo_kron = dense_block_diag(eachslice(pilo, dims=3))
@@ -193,8 +193,8 @@ function main()
     row_wise_normalize(m, p) = reduce(hcat, normalize.(eachrow(m), p))'
 
     kern_pihi_seg = uniform_partition_views(kern_pihi, dim_o, dim_o)
-    weighted_kern_pihi_seg = kern_pihi_seg .* abs.(fudge_kernel).^2
-    smeared_pihi = dropdims(sum(kern_pihi_seg, dims=1), dims=1)
+    weighted_kern_pihi_seg = kern_pihi_seg .* abs.(fudge_kernel)
+    smeared_pihi = dropdims(sum(weighted_kern_pihi_seg, dims=1), dims=1)
     pihi_kron = row_wise_normalize(dense_block_diag(smeared_pihi), 1)
 
     pretty_println(kern_pihi)
