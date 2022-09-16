@@ -77,28 +77,19 @@ function find_perm(B, psi)
     u_normalizer = ((B.^-1) * B') ./ ((psi.^-1) * psi')
 
     normalized_B = B .* sum(u_normalizer, dims=2)
-    println("regularized B:")
-    pretty_println(normalized_B)
-    
     map_normalize((a, b)) = (normalize(a), normalize(b))
     splat_dot((a, b)) = dot(a, b)
     dist_to_one(x) = abs(x - 1)
 
     align_grid = product(eachcol(psi), eachcol(normalized_B))
     raw_perm = dist_to_one.(abs.(splat_dot.(map_normalize.(align_grid))))
-    println("raw_perm:")
-    pretty_println(raw_perm)
 
     projected_perm = hungarian_algorithm(raw_perm)
-    println("projected_perm: ", projected_perm)
-    return projected_perm
 end
 
 function reorder_eigenvecs(vecs_input, kernel)
     vecs = deepcopy(vecs_input)
     vecs[abs.(vecs) .< 1e-8 * maximum(vecs)] .= 0
-    println("Vecs:")
-    pretty_println(vecs)
 
     dim_s = size(kernel)[1]
     dim_os = size(vecs)[1]
@@ -107,8 +98,6 @@ function reorder_eigenvecs(vecs_input, kernel)
     
     kernel_inv = inv(kernel)
     kernel_inv[kernel_inv .< 1e-10 * norm(kernel_inv)] .= 0
-    println("Kernel Inv:")
-    pretty_println(kernel_inv)
 
     partition_grid = dropdims(uniform_partitions(vecs, dim_o, dim_os), dims=2)
 
@@ -118,26 +107,24 @@ function reorder_eigenvecs(vecs_input, kernel)
     average_alignment_score = total_alignment_score ./ total_weight
     average_alignment_score[.!isfinite.(average_alignment_score)] .= 1 # correcting invalid cells
 
-    println("Total alignment score:")
-    pretty_println(total_alignment_score)
-    println("Total weight:")
-    pretty_println(total_weight)
-    println("Average alignment score:")
-    pretty_println(average_alignment_score)
+    # println("Total alignment score:")
+    # pretty_println(total_alignment_score)
+    # println("Total weight:")
+    # pretty_println(total_weight)
+    # println("Average alignment score:")
+    # pretty_println(average_alignment_score)
 
     grouping_mask = alignment_mask(average_alignment_score, dim_o)
     col_groups = generate_groups(grouping_mask)
 
-    pretty_println(grouping_mask)
-    pretty_println(col_groups)
+    # pretty_println(grouping_mask)
+    # pretty_println(col_groups)
     @assert length(col_groups) == dim_o
 
     perm = zeros(Int, dim_o, dim_s)
     for (i, cg) in enumerate(col_groups)
         col_cluster = (x -> x[:, cg]).(partition_grid)
         col_cluster_norm = reduce(hcat, signed_norm.(col_cluster))'
-        println("col_cluster_norm:")
-        pretty_println(col_cluster_norm)
 
         indicator_kernel = iszero.(kernel_inv)
         (profile_assignments, profiles, kernel_with_prof) = group_columns_by_profile(indicator_kernel)
@@ -157,28 +144,18 @@ function reorder_eigenvecs(vecs_input, kernel)
             valid_rows = .!profiles[i]
             sub_col_cluster = col_cluster_norm[valid_rows, col_with_prof[i]]
             sub_kernel_inv = kernel_inv[valid_rows, kernel_with_prof[i]]
-            println("Valid rows: ", valid_rows)
-            println("sub cluster and kernel:")
-            pretty_println(sub_col_cluster)
-            pretty_println(sub_kernel_inv)
 
             sub_cluster_perm = find_perm(sub_col_cluster, sub_kernel_inv)
             cluster_perm[col_with_prof[i]] = kernel_with_prof[i][sub_cluster_perm]
         end
 
-        println("Unsigned column cluster norms:")
-        pretty_println(unsigned_col_cluster_norm)
-        println("Weighted indicator kernel:")
-        pretty_println(weighted_indicator_kernel)
-        println("Hungarian result:")
-
-        println(cluster_perm)
         @assert isperm(cluster_perm)
 
         perm[i, :] = cg[invperm(cluster_perm)]
     end
     perm = cat_cols(perm)
-    pretty_println(perm)
+    println("Permutation:")
+    println(perm)
 
     return vecs[:, perm]
 end

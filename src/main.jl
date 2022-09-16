@@ -5,6 +5,10 @@ using .OptionFramework
 using .Utils
 using LinearAlgebra
 using Base.Iterators
+using ArgParse
+using InteractiveUtils
+
+import .OptionFramework.OrderRecovery.reorder_eigenvecs
 
 function problem_definition()
     dim_s = 4
@@ -26,12 +30,12 @@ function problem_definition()
             0.1  0.9;;; 
             0.9  0.1; 
             0.3  0.7]
-    phi = [1 0 0 0; 0.25 0.25 0.25 0.25;;; 0.5 0.5 0 0; 0 1/3 1/3 1/3;;; 1/3 1/3 1/3 0; 0 0 0.5 0.5;;; 0.25 0.25 0.25 0.25; 0 0 0 1]
+    phi = [0.7 0.1 0.1 0.1; 0.25 0.25 0.25 0.25;;; 0.4 0.4 0.1 0.1; 0.1 0.3 0.3 0.3;;; 0.3 0.3 0.3 0.1; 0.1 0.1 0.4 0.4;;; 0.25 0.25 0.25 0.25; 0.1 0.1 0.1 0.7]
 
     return pihi, pilo, phi
 end
 
-function collect_data(modeltype::Type{K}, load_from="", save_to="", checkpoints = [1000, 10000, 100000, 1000000, 10000000]) where K <: OptFramework
+function collect_data(modeltype::Type{K}, save_to, load_from="", checkpoints = [1000, 10000, 100000, 1000000, 10000000]) where K <: OptFramework
     (pihi, pilo, phi) = problem_definition()
 
     if isfile(load_from)
@@ -112,14 +116,9 @@ function generate_pilo(matrices, basis, dim_o)
     return pilo
 end
 
-function main()
-    checkpoints = [1000, 10000, 100000, 1000000, 10000000, 100000000]
-    modeltype = FaultyActionOptionHSM
-    save_to = "faulty_action_save_data.jld2"
-    load_from = "faulty_action_save_data.jld2"
-    # collect_data(modeltype, load_from, save_to, checkpoints)
+function process_and_print(load_from)
     println("Start loading...")
-    raw_3rd_order = load_moment(save_to)
+    raw_3rd_order = load_moment(load_from)
     raw_data = raw_3rd_order.history[6][2]
     println("Finished loading.")
 
@@ -128,61 +127,18 @@ function main()
     (dim_o, dim_s, dim_a) = size(raw_data)[1:3]
     (phi_estimate, ssAsa, s2s1a2) = generate_moments(raw_data)
 
-    fudge_kernel = (mat -> mat + 0.3sign.(mat))(randn(dim_s, dim_s))
-    # fudge_kernel = ones(dim_s, dim_s) - I(dim_s)[randperm(dim_s), :]
-    fudge_kernel = [1 1 1 0; 
-                    1 1 0 1; 
-                    1 0 1 1; 
-                    0 1 1 1]
-#=     fudge_kernel = [1 1 0 1; 
-                    1 1 1 0; 
-                    0 1 1 1; 
-                    1 0 1 1] =#
-#=     fudge_kernel = [1 1 1 1; 
-                    1 1 0 0; 
-                    0 0 1 1; 
-                    1 1 1 1] + I(dim_s) =#
-    # fudge_kernel = [1 2 3 4; 4 3 2 1; 2 1 3 4; 3 2 1 4]
-    # fudge_kernel = I(dim_s)
-    # fudge_kernel = ones(dim_s, dim_s) +  2I(dim_s)
     fudge_kernel = ones(dim_s, dim_s) +  I(dim_s)
 
     fudge_kernel = inv(fudge_kernel)
     (f_ssAsa, f_sssa) = generate_fudged_moments(phi_estimate, ssAsa, fudge_kernel)
-    pretty_println(fudge_kernel)
-    pretty_println(inv(fudge_kernel))
 
     f_sssa_pinv = pinv(f_sssa)
     tensors_o_interest = [f_sssa_pinv * f_ssAsa[a] for a in 1:dim_a]
     eta = randn(dim_a)
     to_be_composed = sum(tensors_o_interest .* eta)
-    (vals, vecs) = eigen(to_be_composed)
+    (_, vecs) = eigen(to_be_composed)
 
-    println(vals)
-
-    true_basis = inv(true_pihi_kron * true_pilo_kron) * kron(inv(fudge_kernel), I(dim_o))
-
-    normed_vecs = reduce(hcat, normalize.(eachcol(vecs)))
-    normed_true_basis = reduce(hcat, normalize.(eachcol(true_basis)))
-    
-    pretty_println(normed_vecs)
-    pretty_println(normed_true_basis)
-    
-    alignment_grid = (((vec1, vec2),) -> vec1' * vec2).(product(eachcol(normed_vecs), eachcol(normed_true_basis)))
-    alignment_grid = (x -> abs.(abs(x) - 1)).(alignment_grid)
-    pretty_println(alignment_grid)
-    println("Hungarian result")
-    println(hungarian_algorithm(alignment_grid))
-
-    diag(a, vecs) = begin
-        d = inv(vecs) * tensors_o_interest[a] * vecs
-        d[abs.(d) .< 1e-10] .= 0
-        d
-    end
-
-    pretty_println(generate_pilo(tensors_o_interest, vecs, dim_o))
-
-    vecs = OrderRecovery.reorder_eigenvecs(vecs, fudge_kernel)
+    vecs = reorder_eigenvecs(vecs, fudge_kernel)
 
     pilo= generate_pilo(tensors_o_interest, vecs, dim_o)
     pilo_kron = dense_block_diag(eachslice(pilo, dims=3))
@@ -197,18 +153,64 @@ function main()
     smeared_pihi = dropdims(sum(weighted_kern_pihi_seg, dims=1), dims=1)
     pihi_kron = row_wise_normalize(dense_block_diag(smeared_pihi), 1)
 
-    pretty_println(kern_pihi)
-
+    println("Fudge kernel:")
+    pretty_println(fudge_kernel)
+    pretty_println(inv(fudge_kernel))
     println("PILO comparison:")
     pretty_println(pilo_kron)
     pretty_println(true_pilo_kron)
     println("PIHI comparison:")
     pretty_println(pihi_kron)
     pretty_println(true_pihi_kron)
+end
 
-    norm_kern_pihi_seg = reduce(hcat, reduce.(vcat, eachcol(row_wise_normalize.(kern_pihi_seg, 1))))
-    println("normalized kern_pihi_seg:")
-    pretty_println(norm_kern_pihi_seg)
+function main()
+    settings = ArgParseSettings(description = "Spectral method for HIL")
+    @add_arg_table(settings, begin
+        "collect-data", "c"
+            help = "collect data and save to file"
+            action = :command
+        "process-data", "p"
+            help = "process collected data and print result"
+            action = :command
+    end)
+    @add_arg_table(settings["collect-data"], begin
+        "save-loc"
+            help = "location to save data"
+            required = true
+            metavar = "SAVE_LOC"
+        "--load-from", "-l"
+            help = "load location to continue collecting data"
+            default = ""
+        "--model-type", "-m"
+            help = "type of model to run experiment on"
+            default = "OptionHSM"
+    end)
+    @add_arg_table(settings["process-data"], begin
+        "load-loc"
+            help = "load location to continue collecting data"
+            required = true
+            metavar = "LOAD_LOC"
+    end)
+    parsed_args = parse_args(ARGS, settings)
+    if parsed_args["%COMMAND%"] == "collect-data"
+        args = parsed_args["collect-data"]
+
+        modeltype_string = string.(subtypes(OptFramework))
+        modeltype_datatype = subtypes(OptFramework)
+        modeltype_table = Dict(Pair(x...) for x in zip(modeltype_string, modeltype_datatype))
+
+        checkpoints = [1000, 10000, 100000, 1000000, 10000000, 100000000]
+        modeltype = modeltype_table[args["model-type"]]
+        save_to = args["save-loc"]
+        load_from = args["load-from"]
+        collect_data(modeltype, save_to, load_from, checkpoints)
+    elseif parsed_args["%COMMAND%"] == "process-data"
+        args = parsed_args["process-data"]
+        load_from = args["load-loc"]
+
+        process_and_print(load_from)
+    end
 
 end
 

@@ -2,7 +2,6 @@ module OptionFramework
 export OptFramework, OptionHSM, FaultyActionOptionHSM, step!, Raw3rdOrder, augment_raw_data!, save_moment, load_moment, create_checkpoint!
 
 include("./OrderRecovery.jl")
-export OrderRecovery.reorder_eigenvecs
 
 using LinearAlgebra
 using StatsBase
