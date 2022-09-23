@@ -3,7 +3,7 @@ export reorder_eigenvecs
 
 using LinearAlgebra
 using Base.Iterators
-using ...Utils
+using ....Utils
 
 function weighted_gram_and_weights(vec_block)
     norm_block = norm.(eachcol(vec_block))'
@@ -21,23 +21,45 @@ function weighted_gram_and_weights(vec_block)
 end
 
 function alignment_mask(alignment_scores, ngroup)
-    sorted_alignments = sort(view(alignment_scores, :))
-    cutoff_index = div(length(alignment_scores), ngroup)
+    # sorted_alignments = sort(view(alignment_scores, :))
+    # cutoff_index = div(length(alignment_scores), ngroup)
+    #
+    # tol = (sorted_alignments[cutoff_index] + sorted_alignments[cutoff_index + 1]) / 2
+    # is_small(x) = abs(x) < tol
+    #
+    # return is_small.(alignment_scores)
+    
+    (nrow, ncol) = size(alignment_scores)
+    @assert nrow == ncol
+    dim_s = div(nrow, ngroup)
 
-    tol = (sorted_alignments[cutoff_index] + sorted_alignments[cutoff_index + 1]) / 2
-    is_small(x) = abs(x) < tol
-
-    return is_small.(alignment_scores)
+    top_s(col) = begin
+        top_s_indices = sortperm(col)[1:dim_s]
+        ret = falses(nrow)
+        ret[top_s_indices] .= true
+        return ret
+    end
+    return reduce(hcat, top_s.(eachcol(alignment_scores)))
 end
 
-function generate_groups(group_mask)
-    types_of_bitmask = Set{BitVector}()
+function generate_groups(group_mask, dim_s)
+    (num_row, num_col) = size(group_mask)
+    @assert num_row == num_col
+
+    dim_o = div(num_row, dim_s)
+    types_of_bitmask = Dict{BitVector, Int}()
     for (i, col) in enumerate(eachcol(group_mask))
-        push!(types_of_bitmask, col)
+        if sum(col) == dim_s
+            count = get(types_of_bitmask, col, 0)
+            types_of_bitmask[col] = count + 1
+        end
     end
+    @assert length(types_of_bitmask) >= dim_o
+    sorted_types_of_bitmask = [key for (key, _) in sort(types_of_bitmask, rev=true, byvalue=true)]
 
     bitmask_to_group(bitmask) = findall(identity, bitmask)
-    return bitmask_to_group.(types_of_bitmask)
+    groups = bitmask_to_group.(sorted_types_of_bitmask[1:dim_o])
+    return groups
 end
 
 function signed_norm(vec_block)
@@ -87,9 +109,10 @@ function find_perm(B, psi)
     projected_perm = hungarian_algorithm(raw_perm)
 end
 
-function reorder_eigenvecs(vecs_input, kernel)
-    vecs = deepcopy(vecs_input)
-    vecs[abs.(vecs) .< 1e-8 * maximum(vecs)] .= 0
+function reorder_eigenvecs(vecs_input, kernel; terse = false)
+    rotate_to_real = x -> abs(x) * sign(real(x))
+    vecs = rotate_to_real.(vecs_input)
+    vecs[abs.(vecs) .< 1e-8 * maximum(abs.(vecs))] .= 0
 
     dim_s = size(kernel)[1]
     dim_os = size(vecs)[1]
@@ -107,18 +130,23 @@ function reorder_eigenvecs(vecs_input, kernel)
     average_alignment_score = total_alignment_score ./ total_weight
     average_alignment_score[.!isfinite.(average_alignment_score)] .= 1 # correcting invalid cells
 
-    # println("Total alignment score:")
-    # pretty_println(total_alignment_score)
-    # println("Total weight:")
-    # pretty_println(total_weight)
-    # println("Average alignment score:")
-    # pretty_println(average_alignment_score)
-
     grouping_mask = alignment_mask(average_alignment_score, dim_o)
-    col_groups = generate_groups(grouping_mask)
+    col_groups = generate_groups(grouping_mask, dim_s)
 
-    # pretty_println(grouping_mask)
-    # pretty_println(col_groups)
+    if !terse
+        println("Total alignment score:")
+        pretty_println(total_alignment_score)
+        println("Total weight:")
+        pretty_println(total_weight)
+        println("Average alignment score:")
+        pretty_println(average_alignment_score)
+        println("Grouping mask:")
+        pretty_println(grouping_mask)
+        pretty_println(col_groups)
+    end
+
+
+    @assert length(union(col_groups...)) == dim_os
     @assert length(col_groups) == dim_o
 
     perm = zeros(Int, dim_o, dim_s)
@@ -154,10 +182,13 @@ function reorder_eigenvecs(vecs_input, kernel)
         perm[i, :] = cg[invperm(cluster_perm)]
     end
     perm = cat_cols(perm)
-    println("Permutation:")
-    println(perm)
 
-    return vecs[:, perm]
+    if !terse
+        println("Permutation:")
+        println(perm)
+    end
+
+    return vecs_input[:, perm]
 end
 
 end # module

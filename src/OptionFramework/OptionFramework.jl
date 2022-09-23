@@ -1,13 +1,13 @@
 module OptionFramework
-export OptFramework, OptionHSM, FaultyActionOptionHSM, step!, Raw3rdOrder, augment_raw_data!, save_moment, load_moment, create_checkpoint!
-
-include("./OrderRecovery.jl")
+export OptFramework, OptionHSM, FaultyActionOptionHSM, step!, Raw3rdOrder, augment_raw_data!, save_moment, load_moment, create_checkpoint!, compare_pilo, compare_pihi
 
 using LinearAlgebra
 using StatsBase
 using JLD2
+using Combinatorics
 
 abstract type OptFramework end
+
 """
 Simulates an agent acting in an environment according to an option framework model
 """
@@ -153,5 +153,36 @@ Load moment data from a jld2 file
 function load_moment(name::String)
     Raw3rdOrder(load(name, "data"))
 end
+
+"""
+Compute the minimum L2 norm of the difference between truth and prediction
+    with respect to the permutations of options
+"""
+function compare_pilo(est, truth, dim_o)
+    (dim_os, _) = size(est)
+
+    compare(perm) = begin
+        return norm(est[perm, :] - truth)
+    end
+    global_perms = [reshape(reshape(1:dim_os, dim_o, :)[p, :], :) for p in permutations(1:dim_o)]
+    return minimum(compare.(global_perms))
+end
+
+"""
+Compute the minimum L2 norm of the difference between truth and prediction
+    with respect to the permutations of options
+"""
+function compare_pihi(est, truth, dim_o)
+    (dim_os, _) = size(est)
+
+    compare(perm) = begin
+        return norm(est[perm, perm] - truth)
+    end
+    global_perms = [reshape(reshape(1:dim_os, dim_o, :)[p, :], :) for p in permutations(1:dim_o)]
+    return minimum(compare.(global_perms))
+end
+
+include("./MomentsMethod/MomentsMethod.jl")
+include("./EM.jl")
 
 end # module

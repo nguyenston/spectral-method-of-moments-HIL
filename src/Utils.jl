@@ -13,7 +13,7 @@ vectorize(f::Function) = (args...)->f.(args...)
 function dense_block_diag(ms)
     (nrow, ncol) = size(first(ms))
     ndep = length(ms)
-    block_diag = zeros(nrow * ndep, ncol * ndep)
+    block_diag = zeros(eltype(first(ms)), nrow * ndep, ncol * ndep)
     partition_views = uniform_partition_views(block_diag, nrow, ncol)
     for (i, m) in enumerate(ms)
         partition_views[i, i] .= m
