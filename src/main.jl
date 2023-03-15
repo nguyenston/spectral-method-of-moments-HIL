@@ -3,12 +3,14 @@ include("./OptionFramework/OptionFramework.jl")
 using Random
 using .OptionFramework
 using .OptionFramework.MomentsMethod
+using .OptionFramework.EM
 using .Utils
 using LinearAlgebra
 using ArgParse
 using InteractiveUtils
-
-import .OptionFramework.MomentsMethod.OrderRecovery.reorder_eigenvecs
+using LinearAlgebra
+using Base.Iterators
+using JLD2
 
 function problem_definition()
     dim_s = 4
@@ -44,6 +46,9 @@ function main()
         "process-data", "p"
             help = "process collected data and print result"
             action = :command
+        "EM"
+            help = "process collected data by the EM method"
+            action = :command
     end)
     @add_arg_table(settings["collect-data"], begin
         "save-loc"
@@ -69,6 +74,16 @@ function main()
         "--terse", "-t"
             help = "only print the final difference from ground truth"
             action = :store_true
+    end)
+    @add_arg_table(settings["EM"], begin
+        "load-loc"
+            help = "load location to continue collecting data"
+            required = true
+            metavar = "LOAD_LOC"
+        "--n-sample", "-n"
+            help = "specify the number of sample to process"
+            arg_type = Int
+            default = 0
     end)
     parsed_args = parse_args(ARGS, settings)
     if parsed_args["%COMMAND%"] == "collect-data"
@@ -104,8 +119,67 @@ function main()
             print("Please choose the number of sample (1-", length(raw_3rd_order.history), "): ")
             index = parse(Int, readline())
         end
-
         process_and_print(problem_definition, raw_3rd_order, index; terse = terse)
+    elseif parsed_args["%COMMAND%"] == "EM"
+        args = parsed_args["EM"]
+        load_from = args["load-loc"]
+        n_sample = args["n-sample"]
+
+        # println("Start loading...")
+        raw_3rd_order = load_moment(load_from)
+        # println("Finished loading.")
+        #
+        # println("Sample path length:")
+        # println(length(raw_3rd_order.sample_path))
+        if n_sample == 0
+            n_sample = length(raw_3rd_order.sample_path)
+        end
+        # pihi = [0.1  0.9; 
+        #         0.3  0.7;;; 
+        #         0.5  0.5; 
+        #         0.4 0.6;;; 
+        #         0.6  0.4; 
+        #         0.5  0.5;;; 
+        #         0.2  0.8; 
+        #         0.65 0.35]
+        # pilo = [0.3  0.7; 
+        #         0.3  0.7;;; 
+        #         0.9  0.1; 
+        #         0.35 0.65;;; 
+        #         0.6  0.4; 
+        #         0.1  0.9;;; 
+        #         0.2  0.8; 
+        #         0.65 0.35]
+
+        if isfile("./em_seed.jld2")
+            pilo, pihi = load("./em_seed.jld2", "policies")
+        else
+            row_wise_normalize(m, p) = reduce(hcat, normalize.(eachrow(m), p))'
+            # (pihi_kron, pilo_kron, _) = dense_block_diag.(eachslice.(problem_definition(), dims=3))
+            pihi_kron = row_wise_normalize(dense_block_diag(eachslice(abs.(rand(2, 2, 4).^3), dims=3)), 1)
+            pilo_kron = row_wise_normalize(dense_block_diag(eachslice(abs.(rand(2, 2, 4).^3), dims=3)), 1)
+            pihi = extract_block_diag(pihi_kron, 2, 2)
+            pilo = extract_block_diag(pilo_kron, 2, 2)
+            policies = (pilo, pihi)
+            jldsave("./em_seed_local_optima.jld2"; policies)
+        end
+
+        # pilo = 0.5 * ones(2, 2, 4)
+        # pihi = 0.5 * ones(2, 2, 4)
+        pilo_kron = dense_block_diag(eachslice(pilo, dims=3))
+        pihi_kron = dense_block_diag(eachslice(pihi, dims=3))
+
+        (pilo, pihi) = iterate_and_print(problem_definition, raw_3rd_order, n_sample,pilo, pihi, T=000)
+
+        # new_pilo_kron = dense_block_diag(eachslice(pilo, dims=3))
+        # new_pihi_kron = dense_block_diag(eachslice(pihi, dims=3))
+        # (true_pihi_kron, true_pilo_kron, _) = dense_block_diag.(eachslice.(problem_definition(), dims=3))
+        pretty_println(pilo_kron)
+        # pretty_println(new_pilo_kron)
+        # pretty_println(true_pilo_kron)
+        pretty_println(pihi_kron)
+        # pretty_println(new_pihi_kron)
+        # pretty_println(true_pihi_kron)
     end
 
 end

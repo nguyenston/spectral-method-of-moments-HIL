@@ -110,7 +110,7 @@ function collect_data(modeltype::Type{K}, problem, save_to, load_from="", checkp
         if i % 1000 == 0
             print("Sample: ", i, "/", max_T, "\r")
         end
-        if i % 10000 == 0 || i == max_T
+        if i % 5000000 == 0 || i == max_T
             save_moment(save_to, moment_data)
         end
     end

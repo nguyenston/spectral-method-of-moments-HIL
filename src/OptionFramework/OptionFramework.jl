@@ -107,19 +107,22 @@ mutable struct Raw3rdOrder{K <: OptFramework}
     history::Vector{Tuple{Int, Array{Float64}}}
     T::Int
 
-    Raw3rdOrder(model::K) where K <: OptFramework = begin
+    sample_path::Vector{Tuple{Int, Int}}
+    max_path_length::Int
+
+    Raw3rdOrder(model::K, max_path_length=10000000) where K <: OptFramework = begin
         (dim_o, dim_a, dim_s) = size(model.pilo)
         buffer = [step!(model) for _ in 1:3]
         data = zeros(dim_o, dim_s, dim_a, dim_o, dim_s, dim_a, dim_o, dim_s, dim_a)
         data[vcat(buffer...)...] += 1
 
-        new{typeof(model)}(model, buffer, data, [], 3)
+        new{typeof(model)}(model, buffer, data, [], 3, (x -> (x[2], x[3])).(buffer), max_path_length)
     end
     
     Raw3rdOrder(original::Raw3rdOrder{K}) where K <: OptFramework = begin
         clone = deepcopy(original)
 		modeltype = typeof(clone.model)
-        new{K}(K(clone.model), clone.buffer, clone.data, clone.history, clone.T)
+        new{K}(K(clone.model), clone.buffer, clone.data, clone.history, clone.T, clone.sample_path, clone.max_path_length)
     end
 end
 
@@ -128,8 +131,12 @@ Step the model inside the data wrapper forward and update the running joint prob
 """ 
 function augment_raw_data!(data)
     popfirst!(data.buffer)
-    push!(data.buffer, step!(data.model))
+    data_point = step!(data.model)
+    push!(data.buffer, data_point)
     data.data[vcat(data.buffer...)...] += 1
+    if data.T < data.max_path_length
+        push!(data.sample_path, (data_point[2], data_point[3]))
+    end
     data.T += 1
 end
 
